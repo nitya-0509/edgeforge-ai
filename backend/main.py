@@ -5,6 +5,8 @@ import pickle
 import numpy as np
 import os
 import pandas as pd
+import threading
+import time
 from database import get_connection, init_db
 from datetime import datetime
 
@@ -72,6 +74,61 @@ else:
 STATUS_MAP = {0: "Normal", 1: "Warning", 2: "Critical"}
 
 
+def run_auto_simulator():
+    print("Auto-simulator started on server...")
+    step = 0
+    while True:
+        try:
+            wear = (step % 200) / 200
+
+            if wear < 0.6:
+                vx   = float(np.random.normal(0.5, 0.1))
+                vy   = float(np.random.normal(0.5, 0.1))
+                vz   = float(np.random.normal(0.5, 0.1))
+                temp = float(np.random.normal(45, 2))
+            elif wear < 0.85:
+                vx   = float(np.random.normal(1.5, 0.3))
+                vy   = float(np.random.normal(1.5, 0.3))
+                vz   = float(np.random.normal(1.5, 0.3))
+                temp = float(np.random.normal(65, 4))
+            else:
+                vx   = float(np.random.normal(3.0, 0.5))
+                vy   = float(np.random.normal(3.0, 0.5))
+                vz   = float(np.random.normal(3.0, 0.5))
+                temp = float(np.random.normal(85, 6))
+
+            rms        = float(np.sqrt((vx**2 + vy**2 + vz**2) / 3))
+            features   = [[vx, vy, vz, temp, rms]]
+            prediction = int(model.predict(features)[0])
+            confidence = round(float(max(model.predict_proba(features)[0])) * 100, 2)
+            status     = STATUS_MAP[prediction]
+
+            conn = get_connection()
+            cur  = conn.cursor()
+            cur.execute("""
+                INSERT INTO sensor_readings
+                (machine_id, vibration_x, vibration_y, vibration_z, temperature, rms, status, confidence)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, ("MACHINE-01", vx, vy, vz, temp, rms, status, confidence))
+
+            if prediction != 0:
+                message = f"Tool wear detected — {status} state at {confidence}% confidence"
+                cur.execute("""
+                    INSERT INTO alerts (machine_id, status, confidence, message)
+                    VALUES (%s, %s, %s, %s)
+                """, ("MACHINE-01", status, confidence, message))
+
+            conn.commit()
+            cur.close()
+            conn.close()
+            step += 1
+
+        except Exception as e:
+            print(f"Simulator error: {e}")
+
+        time.sleep(3)
+
+
 class SensorInput(BaseModel):
     machine_id: str
     vibration_x: float
@@ -83,6 +140,9 @@ class SensorInput(BaseModel):
 @app.on_event("startup")
 def startup():
     init_db()
+    t = threading.Thread(target=run_auto_simulator, daemon=True)
+    t.start()
+    print("Auto-simulator thread started!")
 
 
 @app.get("/")
@@ -103,12 +163,12 @@ def predict(data: SensorInput):
 
     prediction = int(model.predict(features)[0])
     confidence = round(float(max(model.predict_proba(features)[0])) * 100, 2)
-    status = STATUS_MAP[prediction]
+    status     = STATUS_MAP[prediction]
 
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute("""
-        INSERT INTO sensor_readings 
+        INSERT INTO sensor_readings
         (machine_id, vibration_x, vibration_y, vibration_z, temperature, rms, status, confidence)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """, (
@@ -135,19 +195,19 @@ def predict(data: SensorInput):
 
     return {
         "machine_id": data.machine_id,
-        "status": status,
+        "status":     status,
         "confidence": confidence,
-        "rms": round(rms, 4),
-        "timestamp": datetime.now().isoformat()
+        "rms":        round(rms, 4),
+        "timestamp":  datetime.now().isoformat()
     }
 
 
 @app.get("/history")
 def get_history():
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute("""
-        SELECT * FROM sensor_readings 
+        SELECT * FROM sensor_readings
         ORDER BY timestamp DESC LIMIT 50
     """)
     rows = cur.fetchall()
@@ -159,9 +219,9 @@ def get_history():
 @app.get("/alerts")
 def get_alerts():
     conn = get_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cur.execute("""
-        SELECT * FROM alerts 
+        SELECT * FROM alerts
         ORDER BY timestamp DESC LIMIT 20
     """)
     rows = cur.fetchall()
