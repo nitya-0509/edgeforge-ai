@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import axios from "axios";
 import { AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
-const API = "http://127.0.0.1:8000";
+const API = "https://edgeforge-backend.onrender.com";
 
 const ANOMALY_TYPES = [
   { type: "Thermal Hotspot",     label: "Thermal Hotspot" },
