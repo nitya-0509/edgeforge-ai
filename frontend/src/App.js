@@ -58,6 +58,11 @@ export default function App() {
   const [expanded, setExpanded]   = useState(false);
   const [connected, setConnected] = useState(false);
 
+  const [uploadedImage, setUploadedImage]   = useState(null);
+  const [uploadedFile, setUploadedFile]     = useState(null);
+  const [imageResult, setImageResult]       = useState(null);
+  const [analyzingImage, setAnalyzingImage] = useState(false);
+
   const [manualInput, setManualInput] = useState({
     vibration_x: "0.5",
     vibration_y: "0.5",
@@ -111,6 +116,32 @@ export default function App() {
       console.error(e);
     }
     setSending(false);
+  };
+
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadedFile(file);
+    setImageResult(null);
+    const reader = new FileReader();
+    reader.onloadend = () => setUploadedImage(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const runImageAnalysis = async () => {
+    if (!uploadedFile) return;
+    setAnalyzingImage(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadedFile);
+      const res = await axios.post(`${API}/analyze-image`, formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      setImageResult(res.data);
+    } catch (e) {
+      setImageResult({ error: e.message });
+    }
+    setAnalyzingImage(false);
   };
 
   const presets = [
@@ -434,15 +465,17 @@ export default function App() {
 
         {/* AI Visual Defect Section */}
         <div style={{ background: "#111827", borderRadius: "12px", padding: "24px", marginBottom: "24px", border: "1px solid #1f2937" }}>
-          <h2 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: "700", color: "#ffffff" }}>AI Visual Defect Verification (Image / Video)</h2>
+          <h2 style={{ margin: "0 0 12px", fontSize: "22px", fontWeight: "700", color: "#ffffff" }}>
+            AI Visual Defect Verification (Image / Video)
+          </h2>
           <p style={{ margin: "0 0 24px", fontSize: "14px", color: "#9ca3af", lineHeight: "1.7" }}>
-            Upload a product image or short video. The AI verifies likely product area, detects anomaly regions, and reports defect probability. Offline-first: cached local data and on-device analysis keep the demo usable without internet.
+            Upload a tool image — our CNN model (98.9% accuracy) trained on the NEU Metal Surface Defect database will classify the defect type in real time.
           </p>
 
           <h3 style={{ margin: "0 0 12px", fontSize: "16px", color: "#ffffff" }}>Supported Product Areas</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "20px" }}>
             {PRODUCT_AREAS.map(p => (
-              <div key={p} style={{ background: "#0d1117", border: "1px solid #1f2937", borderRadius: "8px", padding: "14px 16px", fontSize: "14px", color: "#e5e7eb", cursor: "pointer" }}>
+              <div key={p} style={{ background: "#0d1117", border: "1px solid #1f2937", borderRadius: "8px", padding: "14px 16px", fontSize: "14px", color: "#e5e7eb" }}>
                 {p}
               </div>
             ))}
@@ -451,7 +484,7 @@ export default function App() {
           <h3 style={{ margin: "0 0 12px", fontSize: "16px", color: "#ffffff" }}>Known Anomaly Types</h3>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "10px", marginBottom: "16px" }}>
             {(expanded ? ANOMALY_TYPES : ANOMALY_TYPES.slice(0, 6)).map(a => (
-              <div key={a.type} style={{ background: "#0d1117", border: "1px solid #1f2937", borderRadius: "8px", padding: "12px 16px", cursor: "pointer" }}>
+              <div key={a.type} style={{ background: "#0d1117", border: "1px solid #1f2937", borderRadius: "8px", padding: "12px 16px" }}>
                 <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>{a.type}</div>
                 <div style={{ fontSize: "14px", color: "#e5e7eb", fontWeight: "600" }}>{a.label}</div>
               </div>
@@ -461,12 +494,101 @@ export default function App() {
             {expanded ? "▼" : "▶"} View anomaly reference details
           </button>
 
-          <div style={{ border: "1px solid #1f2937", borderRadius: "8px", padding: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
-            <button style={{ background: "#2563eb", color: "#fff", border: "none", borderRadius: "6px", padding: "10px 20px", fontSize: "14px", fontWeight: "600", cursor: "pointer" }}>
-              ↑ Upload
-            </button>
-            <span style={{ fontSize: "13px", color: "#6b7280" }}>200MB per file • JPG, JPEG, PNG, BMP, WEBP, MP4, MOV, AVI, MKV, WEBM, MPEG4</span>
+          {/* Upload Area */}
+          <div style={{ border: "2px dashed #1f2937", borderRadius: "12px", padding: "24px", textAlign: "center", marginBottom: "20px" }}>
+            <input
+              type="file"
+              id="imageUpload"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={handleImageUpload}
+            />
+            <label htmlFor="imageUpload" style={{ cursor: "pointer" }}>
+              <div style={{ marginBottom: "12px", fontSize: "32px" }}>📷</div>
+              <div style={{ fontSize: "15px", color: "#e5e7eb", marginBottom: "8px", fontWeight: "600" }}>
+                Drop image here or click to upload
+              </div>
+              <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                JPG, PNG, BMP, WEBP supported • Max 10MB
+              </div>
+            </label>
+            {uploadedImage && (
+              <div style={{ marginTop: "16px" }}>
+                <img src={uploadedImage} alt="uploaded" style={{ maxHeight: "200px", maxWidth: "100%", borderRadius: "8px", border: "1px solid #1f2937" }} />
+              </div>
+            )}
           </div>
+
+          <button
+            onClick={runImageAnalysis}
+            disabled={!uploadedFile || analyzingImage}
+            style={{
+              padding: "12px 32px", borderRadius: "8px", border: "none",
+              background: !uploadedFile || analyzingImage ? "#1f2937" : "linear-gradient(90deg,#00b4d8,#00e5ff)",
+              color: !uploadedFile || analyzingImage ? "#6b7280" : "#000",
+              fontSize: "14px", fontWeight: "700", cursor: !uploadedFile || analyzingImage ? "not-allowed" : "pointer",
+              marginBottom: "20px", width: "100%"
+            }}
+          >
+            {analyzingImage ? "Analyzing with CNN..." : "Run AI Defect Analysis"}
+          </button>
+
+          {/* Results */}
+          {imageResult && !imageResult.error && (
+            <div style={{ background: "#0d1117", borderRadius: "12px", padding: "20px", border: `1px solid ${imageResult.color}`, boxShadow: `0 0 20px ${imageResult.color}22` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+                <div>
+                  <div style={{ fontSize: "11px", color: "#6b7280", letterSpacing: "2px", marginBottom: "4px" }}>DEFECT DETECTED</div>
+                  <div style={{ fontSize: "24px", fontWeight: "800", color: imageResult.color }}>{imageResult.defect_type}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>CONFIDENCE</div>
+                  <div style={{ fontSize: "28px", fontWeight: "800", color: imageResult.color }}>{imageResult.confidence}%</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>SEVERITY</div>
+                  <div style={{ fontSize: "18px", fontWeight: "700", color: imageResult.severity === "High" ? "#ff3366" : imageResult.severity === "Medium" ? "#ffaa00" : "#00ff88" }}>
+                    {imageResult.severity}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+                <div style={{ background: "#111827", borderRadius: "8px", padding: "12px 16px", borderLeft: `3px solid ${imageResult.color}` }}>
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "6px", letterSpacing: "1px" }}>DESCRIPTION</div>
+                  <div style={{ fontSize: "13px", color: "#e5e7eb", lineHeight: "1.6" }}>{imageResult.description}</div>
+                </div>
+                <div style={{ background: "#111827", borderRadius: "8px", padding: "12px 16px", borderLeft: "3px solid #ffaa00" }}>
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "6px", letterSpacing: "1px" }}>RECOMMENDED ACTION</div>
+                  <div style={{ fontSize: "13px", color: "#e5e7eb", lineHeight: "1.6" }}>{imageResult.action}</div>
+                </div>
+              </div>
+
+              {/* Probability Bars */}
+              <div style={{ background: "#111827", borderRadius: "8px", padding: "16px" }}>
+                <div style={{ fontSize: "11px", color: "#6b7280", letterSpacing: "2px", marginBottom: "12px" }}>ALL CLASS PROBABILITIES</div>
+                {Object.entries(imageResult.all_probabilities)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([cls, prob]) => (
+                    <div key={cls} style={{ marginBottom: "8px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
+                        <span style={{ fontSize: "12px", color: "#9ca3af" }}>{cls.replace("_", " ").replace("-", " ")}</span>
+                        <span style={{ fontSize: "12px", color: prob > 50 ? imageResult.color : "#6b7280", fontWeight: "600" }}>{prob}%</span>
+                      </div>
+                      <div style={{ background: "#1f2937", borderRadius: "3px", height: "4px" }}>
+                        <div style={{ width: `${prob}%`, height: "100%", background: prob > 50 ? imageResult.color : "#374151", borderRadius: "3px", transition: "width 0.5s ease" }} />
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+
+          {imageResult?.error && (
+            <div style={{ background: "rgba(255,51,102,0.1)", border: "1px solid #ff3366", borderRadius: "8px", padding: "16px", color: "#ff3366", fontSize: "14px" }}>
+              Error: {imageResult.error}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
