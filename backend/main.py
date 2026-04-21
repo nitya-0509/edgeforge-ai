@@ -76,6 +76,8 @@ if os.path.exists(MODEL_PATH):
 else:
     model = train_and_save()
 
+FEATURE_NAMES = ["vibration_x", "vibration_y", "vibration_z", "temperature", "rms"]
+
 STATUS_MAP = {0: "Normal", 1: "Warning", 2: "Critical"}
 
 cnn_model   = None
@@ -164,7 +166,7 @@ def run_auto_simulator():
                 temp = float(np.random.normal(85, 6))
 
             rms        = float(np.sqrt((vx**2 + vy**2 + vz**2) / 3))
-            features   = [[vx, vy, vz, temp, rms]]
+            features   = pd.DataFrame([[vx, vy, vz, temp, rms]], columns=FEATURE_NAMES)
             prediction = int(model.predict(features)[0])
             confidence = round(float(max(model.predict_proba(features)[0])) * 100, 2)
             status     = STATUS_MAP[prediction]
@@ -219,13 +221,13 @@ def root():
 @app.post("/predict")
 def predict(data: SensorInput):
     rms = float(np.sqrt((data.vibration_x**2 + data.vibration_y**2 + data.vibration_z**2) / 3))
-    features = [[
+    features = pd.DataFrame([[
         float(data.vibration_x),
         float(data.vibration_y),
         float(data.vibration_z),
         float(data.temperature),
         rms
-    ]]
+    ]], columns=FEATURE_NAMES)
 
     prediction = int(model.predict(features)[0])
     confidence = round(float(max(model.predict_proba(features)[0])) * 100, 2)
