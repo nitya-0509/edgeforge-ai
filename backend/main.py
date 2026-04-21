@@ -228,3 +228,101 @@ def get_alerts():
     cur.close()
     conn.close()
     return {"alerts": list(rows)}
+
+
+@app.get("/recommendation")
+def get_recommendation():
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+        cur.execute("""
+            SELECT * FROM sensor_readings
+            ORDER BY timestamp DESC LIMIT 10
+        """)
+        recent = cur.fetchall()
+        cur.execute("""
+            SELECT COUNT(*) as cnt FROM alerts
+            WHERE timestamp > NOW() - INTERVAL '10 minutes'
+        """)
+        alert_count = cur.fetchone()["cnt"]
+        cur.close()
+        conn.close()
+
+        if not recent:
+            return {"recommendation": {
+                "urgency":                     "Scheduled",
+                "action":                      "No sensor data yet. Start the simulator to begin monitoring.",
+                "reason":                      "System is online and waiting for first reading.",
+                "estimated_defects_prevented": 0,
+                "downtime_saved_minutes":      0,
+                "next_check_in":               "5 minutes",
+                "health_score":                100,
+                "status":                      "Normal",
+                "timestamp":                   datetime.now().isoformat()
+            }}
+
+        latest   = recent[0]
+        avg_rms  = sum(r["rms"] for r in recent) / len(recent)
+        avg_temp = sum(r["temperature"] for r in recent) / len(recent)
+        status   = latest["status"]
+        rms      = latest["rms"]
+        temp     = latest["temperature"]
+        conf     = latest["confidence"]
+        trend    = "rising" if recent[0]["rms"] > recent[-1]["rms"] else "stable"
+
+        if status == "Critical":
+            health_score = max(5,  int(100 - (rms / 5.0) * 100))
+            urgency      = "Immediate"
+            action       = f"Stop MACHINE-01 immediately and replace the cutting tool. RMS vibration at {rms:.3f} mm/s² and temperature at {temp:.1f}°C indicate imminent tool failure."
+            reason       = f"Vibration has exceeded critical threshold of 2.5 mm/s² with {alert_count} alerts in the last 10 minutes. Continuing operation risks producing defective parts and permanent spindle damage."
+            defects      = min(200, int(alert_count * 12 + rms * 30))
+            downtime     = min(120, int(alert_count * 8  + 20))
+            next_check   = "Immediately after tool replacement"
+
+        elif status == "Warning":
+            health_score = max(25, int(100 - (rms / 5.0) * 80))
+            urgency      = "Within 2 hours"
+            action       = f"Schedule tool inspection for MACHINE-01 within the next 2 hours. Vibration trend is {trend} at {rms:.3f} mm/s² — plan replacement during next shift break."
+            reason       = f"Temperature averaging {avg_temp:.1f}°C with vibration RMS of {avg_rms:.3f} mm/s² suggests accelerated tool wear. Early intervention prevents unplanned downtime."
+            defects      = min(120, int(alert_count * 6  + rms * 15))
+            downtime     = min(90,  int(alert_count * 5  + 10))
+            next_check   = "30 minutes"
+
+        else:
+            health_score = min(100, max(70, int(100 - (rms / 5.0) * 40)))
+            urgency      = "Scheduled"
+            action       = f"MACHINE-01 operating normally. Continue monitoring. Schedule next preventive maintenance in 48 hours as per standard protocol."
+            reason       = f"Vibration RMS stable at {rms:.3f} mm/s² and temperature at {temp:.1f}°C — both within safe operating thresholds. No anomalies detected."
+            defects      = 0
+            downtime     = 0
+            next_check   = "4 hours"
+
+        return {"recommendation": {
+            "urgency":                     urgency,
+            "action":                      action,
+            "reason":                      reason,
+            "estimated_defects_prevented": defects,
+            "downtime_saved_minutes":      downtime,
+            "next_check_in":               next_check,
+            "health_score":                health_score,
+            "status":                      status,
+            "confidence":                  conf,
+            "avg_rms":                     round(avg_rms, 3),
+            "avg_temp":                    round(avg_temp, 1),
+            "alert_count":                 alert_count,
+            "timestamp":                   datetime.now().isoformat()
+        }}
+
+    except Exception as e:
+        print(f"Recommendation error: {e}")
+        return {"recommendation": {
+            "urgency":                     "Unknown",
+            "action":                      "System error — please refresh",
+            "reason":                      str(e),
+            "estimated_defects_prevented": 0,
+            "downtime_saved_minutes":      0,
+            "next_check_in":               "5 minutes",
+            "health_score":                50,
+            "status":                      "Unknown",
+            "timestamp":                   datetime.now().isoformat()
+        }}
