@@ -6,4 +6,6 @@ numpy
 psycopg2-binary
 python-dotenv
 requests
-anthropic
+tensorflow
+pillow
+python-multipart

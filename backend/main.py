@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pickle
@@ -7,6 +7,8 @@ import os
 import pandas as pd
 import threading
 import time
+import io
+import json as json_module
 from database import get_connection, init_db
 from datetime import datetime
 
@@ -21,6 +23,9 @@ app.add_middleware(
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_PATH = os.path.join(BASE_DIR, "ml", "model.pkl")
+CNN_MODEL_PATH = os.path.join(BASE_DIR, "ml", "defect_model.keras")
+CLASS_INDICES_PATH = os.path.join(BASE_DIR, "ml", "class_indices.json")
+
 
 def train_and_save():
     from sklearn.ensemble import RandomForestClassifier
@@ -73,6 +78,68 @@ else:
 
 STATUS_MAP = {0: "Normal", 1: "Warning", 2: "Critical"}
 
+cnn_model   = None
+class_names = None
+
+
+def load_cnn():
+    global cnn_model, class_names
+    try:
+        import tensorflow as tf
+        from PIL import Image
+        if os.path.exists(CNN_MODEL_PATH) and os.path.exists(CLASS_INDICES_PATH):
+            cnn_model = tf.keras.models.load_model(CNN_MODEL_PATH)
+            with open(CLASS_INDICES_PATH, "r") as f:
+                idx = json_module.load(f)
+            class_names = {v: k for k, v in idx.items()}
+            print("CNN defect model loaded!")
+        else:
+            print("CNN model file not found — skipping")
+    except Exception as e:
+        print(f"CNN load error: {e}")
+
+
+load_cnn()
+
+DEFECT_INFO = {
+    "crazing": {
+        "severity":    "Medium",
+        "description": "Network of fine cracks on surface due to thermal stress or material fatigue",
+        "action":      "Monitor closely — schedule inspection within 4 hours",
+        "color":       "#ffaa00"
+    },
+    "inclusion": {
+        "severity":    "High",
+        "description": "Foreign material embedded in steel surface during rolling process",
+        "action":      "Remove tool from production line immediately for quality inspection",
+        "color":       "#ff3366"
+    },
+    "patches": {
+        "severity":    "Low",
+        "description": "Irregular surface patches caused by uneven material distribution",
+        "action":      "Log defect and continue monitoring — schedule maintenance next shift",
+        "color":       "#00e5ff"
+    },
+    "pitted_surface": {
+        "severity":    "High",
+        "description": "Small cavities or pits on surface indicating corrosion or wear",
+        "action":      "Replace tool immediately — pitting indicates advanced wear stage",
+        "color":       "#ff3366"
+    },
+    "rolled-in_scale": {
+        "severity":    "Medium",
+        "description": "Scale pressed into surface during rolling — affects surface finish",
+        "action":      "Adjust rolling pressure and schedule surface treatment",
+        "color":       "#ffaa00"
+    },
+    "scratches": {
+        "severity":    "Low",
+        "description": "Linear surface marks from abrasive contact during manufacturing",
+        "action":      "Inspect tooling alignment — minor adjustment required",
+        "color":       "#00ff88"
+    }
+}
+
 
 def run_auto_simulator():
     print("Auto-simulator started on server...")
@@ -80,7 +147,6 @@ def run_auto_simulator():
     while True:
         try:
             wear = (step % 200) / 200
-
             if wear < 0.6:
                 vx   = float(np.random.normal(0.5, 0.1))
                 vy   = float(np.random.normal(0.5, 0.1))
@@ -130,11 +196,11 @@ def run_auto_simulator():
 
 
 class SensorInput(BaseModel):
-    machine_id: str
+    machine_id:  str
     vibration_x: float
     vibration_y: float
     vibration_z: float
-    temperature: float
+    temperature:  float
 
 
 @app.on_event("startup")
@@ -278,7 +344,6 @@ def get_recommendation():
             defects      = min(200, int(alert_count * 12 + rms * 30))
             downtime     = min(120, int(alert_count * 8  + 20))
             next_check   = "Immediately after tool replacement"
-
         elif status == "Warning":
             health_score = max(25, int(100 - (rms / 5.0) * 80))
             urgency      = "Within 2 hours"
@@ -287,7 +352,6 @@ def get_recommendation():
             defects      = min(120, int(alert_count * 6  + rms * 15))
             downtime     = min(90,  int(alert_count * 5  + 10))
             next_check   = "30 minutes"
-
         else:
             health_score = min(100, max(70, int(100 - (rms / 5.0) * 40)))
             urgency      = "Scheduled"
@@ -326,3 +390,46 @@ def get_recommendation():
             "status":                      "Unknown",
             "timestamp":                   datetime.now().isoformat()
         }}
+
+
+@app.post("/analyze-image")
+async def analyze_image(file: UploadFile = File(...)):
+    try:
+        if cnn_model is None:
+            return {"error": "CNN model not loaded on server"}
+
+        import tensorflow as tf
+        from PIL import Image
+
+        contents  = await file.read()
+        img       = Image.open(io.BytesIO(contents)).convert("RGB")
+        img       = img.resize((224, 224))
+        img_array = tf.keras.preprocessing.image.img_to_array(img)
+        img_array = tf.expand_dims(img_array, 0) / 255.0
+
+        predictions  = cnn_model.predict(img_array, verbose=0)
+        predicted_idx = int(tf.argmax(predictions[0]).numpy())
+        confidence   = float(tf.reduce_max(predictions[0]).numpy()) * 100
+        defect_name  = class_names[predicted_idx]
+        info         = DEFECT_INFO.get(defect_name, {})
+
+        all_probs = {
+            class_names[i]: round(float(predictions[0][i]) * 100, 1)
+            for i in range(len(class_names))
+        }
+
+        return {
+            "defect_type":     defect_name.replace("_", " ").title(),
+            "defect_key":      defect_name,
+            "confidence":      round(confidence, 1),
+            "severity":        info.get("severity", "Unknown"),
+            "description":     info.get("description", ""),
+            "action":          info.get("action", ""),
+            "color":           info.get("color", "#00e5ff"),
+            "all_probabilities": all_probs,
+            "timestamp":       datetime.now().isoformat()
+        }
+
+    except Exception as e:
+        print(f"Image analysis error: {e}")
+        return {"error": str(e)}
